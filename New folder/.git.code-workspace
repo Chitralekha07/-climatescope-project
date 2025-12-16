@@ -8,4 +8,22 @@
 		}
 	],
 	"settings": {}
-}
+}import pandas as pd
+
+# 1. Load the raw data
+file_path = "data/GlobalWeatherRepository.csv"
+df = pd.read_csv(file_path)
+
+# 2. Basic info
+print("Shape:", df.shape)
+print("\nColumns:\n", df.columns)
+print("\nInfo:")
+print(df.info())
+
+# 3. Missing values per column
+print("\nMissing values per column:")
+print(df.isna().sum().sort_values(ascending=False))
+
+# 4. First few rows
+print("\nHead:")
+print(df.head())
