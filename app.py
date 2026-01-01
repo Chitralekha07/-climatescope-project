@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-
 # --------- DATA LOADING ---------
 @st.cache_data
 def load_data():
@@ -10,7 +9,21 @@ def load_data():
     df["last_updated"] = pd.to_datetime(df["last_updated"])
     df["date"] = df["last_updated"].dt.date
     df["month"] = df["last_updated"].dt.month
+
+    # Season column for seasonal filter
+    def month_to_season(m):
+        if m in [12, 1, 2]:
+            return "Winter"
+        elif m in [3, 4, 5]:
+            return "Spring"
+        elif m in [6, 7, 8]:
+            return "Summer"
+        else:
+            return "Autumn"
+
+    df["season"] = df["month"].apply(month_to_season)
     return df
+
 
 df = load_data()
 
@@ -45,6 +58,12 @@ threshold = st.sidebar.number_input(
     value=40.0,
 )
 
+# Above / below for extremes
+extreme_type = st.sidebar.radio(
+    "Show extremes above or below threshold?",
+    ["Above", "Below"],
+)
+
 # Time aggregation
 agg_level = st.sidebar.radio(
     "Time aggregation",
@@ -52,50 +71,69 @@ agg_level = st.sidebar.radio(
     index=0,
 )
 
-# Apply filters to base dataframe
+# Seasonal filter
+season = st.sidebar.selectbox(
+    "Season (optional)",
+    ["All seasons", "Winter", "Spring", "Summer", "Autumn"],
+)
+
+# --------- APPLY FILTERS TO BASE DATAFRAME ---------
 filtered_df = df.copy()
+
 if selected_countries:
     filtered_df = filtered_df[filtered_df["country"].isin(selected_countries)]
+
 filtered_df = filtered_df[
-    (filtered_df["date"] >= selected_dates[0]) & (filtered_df["date"] <= selected_dates[1])
+    (filtered_df["date"] >= selected_dates[0])
+    & (filtered_df["date"] <= selected_dates[1])
 ]
+
+if season != "All seasons":
+    filtered_df = filtered_df[filtered_df["season"] == season]
+
+# Extreme subset (using all filters + above/below choice)
+if extreme_type == "Above":
+    extreme_filtered_df = filtered_df[filtered_df[selected_metric] > threshold]
+else:
+    extreme_filtered_df = filtered_df[filtered_df[selected_metric] < threshold]
 
 # --------- PAGE SELECTION ---------
 page = st.sidebar.radio(
     "Go to page",
     ["Executive dashboard", "Statistical analysis", "Climate trends", "Extreme events", "Help"],
 )
-# --------- PAGE FUNCTIONS ---------
 
+# --------- PAGE FUNCTIONS ---------
 def page_executive(df_page):
     st.title("Executive Dashboard")
 
     st.subheader(f"Key metrics ({agg_level} view)")
 
-    # Always compute from filtered daily rows
     avg_temp = df_page["temperature_celsius"].mean()
     avg_hum = df_page["humidity"].mean()
-    extreme_count = (df_page[selected_metric] >= threshold).sum()
+
+    if extreme_type == "Above":
+        extreme_count = (df_page[selected_metric] > threshold).sum()
+    else:
+        extreme_count = (df_page[selected_metric] < threshold).sum()
 
     col1, col2, col3 = st.columns(3)
 
     col1.metric("Avg temperature (°C)", f"{avg_temp:.1f}")
     col2.metric("Avg humidity (%)", f"{avg_hum:.1f}")
     col3.metric(
-        f"Extreme events ({selected_metric} ≥ {threshold})",
+        f"Extreme events ({'>' if extreme_type=='Above' else '<'} {threshold})",
         f"{extreme_count}",
     )
 
     st.write(
-        "These KPIs update with the sidebar filters (countries, dates, metric, threshold). "
-        "Use other pages for detailed daily/monthly trend views."
+        "These KPIs update with the sidebar filters (countries, dates, metric, threshold, season). "
+        "Use the other pages for detailed trend and distribution views."
     )
-    st.divider()
-    st.subheader("Geographic overview")
 
+    st.divider()
     st.subheader(f"Global map of {selected_metric}")
 
-    # Aggregate by country to avoid too many points
     map_df = (
         df_page.groupby("country")[selected_metric]
         .mean()
@@ -117,7 +155,7 @@ def page_executive(df_page):
 
     st.markdown(
         "The map shows how the selected metric varies by country for the chosen filters. "
-        "Use the sidebar to adjust countries, date range, and metric."
+        "Use the sidebar to adjust countries, date range, metric, and season."
     )
 
 
@@ -139,7 +177,7 @@ def page_statistical(df_page):
 
     st.markdown(
         "This scatter plot shows how the selected metric relates to humidity for the "
-        "filtered countries and dates."
+        "filtered countries, dates, and season."
     )
 
     st.subheader(f"Country comparison for {selected_metric}")
@@ -165,7 +203,8 @@ def page_statistical(df_page):
     st.markdown(
         "This bar chart compares average values by country using the current filters."
     )
-    st.subheader(f"Distribution of {selected_metric}")
+
+    st.subheader(f"Distributions of {selected_metric}")
 
     col1, col2 = st.columns(2)
 
@@ -181,20 +220,25 @@ def page_statistical(df_page):
         st.plotly_chart(fig_hist, use_container_width=True)
 
     with col2:
-        fig_box = px.box(
+        # Violin plot (new requirement)
+        fig_violin = px.violin(
             df_page,
+            x="country",
             y=selected_metric,
+            box=True,
+            points="all",
             color="country",
-            points="outliers",
-            labels={selected_metric: selected_metric},
-            title=f"Box plot of {selected_metric} by country",
+            labels={"country": "Country", selected_metric: selected_metric},
+            title=f"Violin plot of {selected_metric} by country",
         )
-        st.plotly_chart(fig_box, use_container_width=True)
+        fig_violin.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_violin, use_container_width=True)
 
     st.markdown(
-        "The histogram shows the overall distribution of the selected metric, "
-        "and the box plot highlights spread and outliers by country."
+        "The histogram shows the overall distribution, while the violin plot highlights "
+        "the spread and density of values by country."
     )
+
     st.subheader("Correlation heatmap (core metrics)")
 
     corr_cols = ["temperature_celsius", "humidity", "precip_mm", "wind_kph", "uv_index"]
@@ -216,7 +260,6 @@ def page_statistical(df_page):
     )
 
 
-
 def page_trends(df_page):
     st.title("Climate Trends")
 
@@ -224,7 +267,6 @@ def page_trends(df_page):
 
     df_ts = df_page.sort_values("last_updated")
 
-    # --- DAILY VIEW ---
     if agg_level == "Daily":
         fig_line = px.line(
             df_ts,
@@ -256,8 +298,8 @@ def page_trends(df_page):
         fig_area.update_layout(xaxis_rangeslider_visible=True)
         st.plotly_chart(fig_area, use_container_width=True)
 
-    # --- MONTHLY VIEW ---
-    else:  # agg_level == "Monthly"
+    else:  # Monthly
+        df_page = df_page.copy()
         df_page["year_month"] = df_page["last_updated"].dt.to_period("M").astype(str)
 
         df_monthly_country = (
@@ -296,7 +338,9 @@ def page_trends(df_page):
         )
         st.plotly_chart(fig_area, use_container_width=True)
 
-        st.markdown("Monthly aggregation smooths short‑term noise to show long‑term trends.")
+        st.markdown(
+            "Monthly aggregation smooths short‑term noise to show long‑term trends."
+        )
 
 
 def page_extremes(df_page):
@@ -305,8 +349,9 @@ def page_extremes(df_page):
     st.subheader(f"Top 5 days with highest {selected_metric}")
 
     top5 = (
-        df_page.sort_values(selected_metric, ascending=False)
-        [["date", "country", selected_metric]]
+        df_page.sort_values(selected_metric, ascending=False)[
+            ["date", "country", selected_metric]
+        ]
         .head(5)
     )
     st.dataframe(top5, use_container_width=True)
@@ -315,9 +360,12 @@ def page_extremes(df_page):
         f"These are the 5 highest values of **{selected_metric}** in the filtered data."
     )
 
-    st.subheader(f"Events where {selected_metric} ≥ {threshold}")
+    st.subheader(
+        f"Events where {selected_metric} "
+        f"{'>' if extreme_type=='Above' else '<'} {threshold}"
+    )
 
-    extreme_df = df_page[df_page[selected_metric] >= threshold]
+    extreme_df = extreme_filtered_df
 
     col1, col2 = st.columns(2)
     col1.metric("Number of extreme events", len(extreme_df))
@@ -352,6 +400,7 @@ def page_extremes(df_page):
 
     st.subheader("Extreme events over time (monthly count)")
 
+    extreme_df = extreme_df.copy()
     extreme_df["year_month"] = extreme_df["last_updated"].dt.to_period("M").astype(str)
     monthly_counts = (
         extreme_df.groupby("year_month")[selected_metric]
@@ -369,6 +418,7 @@ def page_extremes(df_page):
     )
     st.plotly_chart(fig_line, use_container_width=True)
 
+
 def page_help():
     st.title("Help & User Guide")
 
@@ -379,13 +429,14 @@ def page_help():
   - Select one or more countries.  
   - Use the date range slider to focus on a specific period.  
   - Choose the metric (temperature, humidity, precipitation, wind speed).  
-  - Set an extreme threshold for the chosen metric.  
-  - Switch between *Daily* and *Monthly* aggregation for the Climate Trends page.
+  - Set an extreme threshold and whether to show values above or below it.  
+  - Switch between *Daily* and *Monthly* aggregation for the Climate Trends page.  
+  - Optionally filter by season (Winter, Spring, Summer, Autumn).  
 - **Pages**  
   - *Executive dashboard*: Key KPIs and global map overview.  
-  - *Statistical analysis*: Scatter plots, distributions, and correlation heatmap.  
+  - *Statistical analysis*: Scatter plots, distributions, violin plot, and correlation heatmap.  
   - *Climate trends*: Daily/Monthly time‑series and area charts.  
-  - *Extreme events*: Top extreme days, country counts, and monthly frequency trends.
+  - *Extreme events*: Top extreme days, country counts, and monthly frequency trends.  
 - **Interactivity**  
   - Hover over points/bars/map bubbles to see exact values.  
   - Use the Plotly toolbar on each chart to zoom, pan, and download as PNG.
@@ -401,6 +452,7 @@ def page_help():
     )
 
 
+# --------- RENDER SELECTED PAGE ---------
 if page == "Executive dashboard":
     page_executive(filtered_df)
 elif page == "Statistical analysis":
